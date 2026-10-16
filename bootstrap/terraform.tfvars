@@ -1,5 +1,5 @@
 github_repo      = "sabiut/platform-infra"
-gitlab_namespace = "personal2030641"
+gitlab_namespace = "sabiut"
 gitlab_app_repos = {
   backend  = "backend"
   frontend = "frontend"
