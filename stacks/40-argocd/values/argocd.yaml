@@ -1,0 +1,34 @@
+# Production Argo CD: HA, no public UI (reach it with kubectl port-forward until SSO and an
+# internal ALB are added).
+global:
+  domain: argocd.internal
+
+redis-ha:
+  enabled: true
+
+controller:
+  replicas: 1
+
+server:
+  replicas: 2
+  pdb:
+    enabled: true
+    minAvailable: 1
+
+repoServer:
+  replicas: 2
+  pdb:
+    enabled: true
+    minAvailable: 1
+
+applicationSet:
+  replicas: 2
+
+configs:
+  cm:
+    timeout.reconciliation: 180s
+  params:
+    server.insecure: true
+
+dex:
+  enabled: false

@@ -1,0 +1,53 @@
+# Nightly: plan every stack and open an issue if anything changed outside Terraform.
+name: drift
+
+on:
+  schedule:
+    - cron: "0 19 * * *"   # 05:00 Sydney
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+  issues: write
+
+env:
+  AWS_REGION: ap-southeast-2
+  TF_IN_AUTOMATION: "1"
+  TF_CLI_ARGS: "-no-color"
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.16.6
+          terraform_wrapper: false
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.GHA_PLAN_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: check every stack
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          drifted=""
+          check() {
+            scripts/tf.sh plan "$@" > /dev/null
+            dir=$([[ $1 == global ]] && echo global || echo "stacks/$1")
+            n=$(terraform -chdir="$dir" show -json tfplan |
+                jq '[.resource_changes[]? | select(.change.actions != ["no-op"] and .change.actions != ["read"])] | length')
+            [[ $n -gt 0 ]] && drifted+="- \`$*\`: $n resource(s) differ"$'\n'
+            true
+          }
+          check global
+          for r in ap-southeast-2 eu-west-2; do
+            for s in 10-network 20-eks 30-data 40-argocd; do check $s $r; done
+          done
+          if [[ -n $drifted ]]; then
+            printf 'Nightly plan found changes made outside Terraform:\n\n%s\nRun: %s\n' \
+              "$drifted" "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" > issue.md
+            gh issue create --title "Infrastructure drift $(date -u +%F)" --body-file issue.md
+          fi

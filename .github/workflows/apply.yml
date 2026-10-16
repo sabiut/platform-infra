@@ -1,0 +1,74 @@
+# Merge to main: plan everything (visible in the run summary), then wait for a reviewer on
+# the "production" environment, then apply in dependency order, one region at a time.
+#
+# The apply job re-plans each stack just before applying it, because a downstream stack's
+# plan depends on what the upstream apply just produced. The reviewer approves after reading
+# the plan job's output.
+name: apply
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: terraform-apply
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ap-southeast-2
+  TF_IN_AUTOMATION: "1"
+  TF_CLI_ARGS: "-no-color"
+  REGIONS: "ap-southeast-2 eu-west-2"
+  STACKS: "10-network 20-eks 30-data 40-argocd"
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.16.6
+          terraform_wrapper: false
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.GHA_PLAN_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: plan all
+        run: |
+          {
+            scripts/tf.sh plan global
+            for r in $REGIONS; do for s in $STACKS; do scripts/tf.sh plan $s $r; done; done
+          } 2>&1 | tee plan.txt
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          grep -E '^(Plan:|No changes)' plan.txt >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+  apply:
+    needs: plan
+    runs-on: ubuntu-latest
+    environment: production   # required reviewer; also what the gha-apply role trusts
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.16.6
+          terraform_wrapper: false
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.GHA_APPLY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 7200
+      - name: apply global
+        run: scripts/tf.sh apply global
+      - name: apply regions in order
+        run: |
+          for r in $REGIONS; do
+            echo "::group::$r"
+            for s in $STACKS; do scripts/tf.sh apply $s $r; done
+            echo "::endgroup::"
+          done

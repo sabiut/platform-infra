@@ -1,0 +1,75 @@
+# Every pull request: format, lint and security checks, then a plan for each stack in each
+# region, posted on the pull request. Uses the read-only gha-plan role.
+name: plan
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  id-token: write       # OIDC token for AWS
+  contents: read
+  pull-requests: write  # plan comment
+
+env:
+  AWS_REGION: ap-southeast-2
+  TF_IN_AUTOMATION: "1"
+  TF_CLI_ARGS: "-no-color"
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.16.6
+      - run: terraform fmt -check -recursive
+      - uses: terraform-linters/setup-tflint@v4
+      - run: tflint --init && tflint --recursive
+      - uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: config
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+
+  plan:
+    needs: checks
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - global
+          - 10-network ap-southeast-2
+          - 20-eks ap-southeast-2
+          - 30-data ap-southeast-2
+          - 40-argocd ap-southeast-2
+          - 10-network eu-west-2
+          - 20-eks eu-west-2
+          - 30-data eu-west-2
+          - 40-argocd eu-west-2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.16.6
+          terraform_wrapper: false
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.GHA_PLAN_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: plan
+        run: |
+          scripts/tf.sh plan ${{ matrix.target }} | tee plan.txt
+      - name: comment
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo "### plan: \`${{ matrix.target }}\`"
+            echo '<details><summary>'"$(grep -E '^(Plan:|No changes)' plan.txt | tail -1)"'</summary>'
+            echo; echo '```'; tail -c 60000 plan.txt; echo '```'; echo '</details>'
+          } > comment.md
+          gh pr comment ${{ github.event.pull_request.number }} --body-file comment.md
