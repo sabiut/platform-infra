@@ -1,5 +1,5 @@
 # Argo CD itself, installed once. From here on Argo CD manages everything in the cluster,
-# reading envs/<environment>/<region>/ in the gitops repo.
+# reading envs/<environment>/<region>/apps/ in the gitops repo.
 
 resource "helm_release" "argocd" {
   name             = "argocd"
@@ -60,7 +60,7 @@ resource "helm_release" "root_app" {
         source = {
           repoURL        = var.gitops_repo_url
           targetRevision = "main"
-          path           = "envs/${var.environment}/${var.region}"
+          path           = "envs/${var.environment}/${var.region}/apps"
         }
         destination = {
           server    = "https://kubernetes.default.svc"

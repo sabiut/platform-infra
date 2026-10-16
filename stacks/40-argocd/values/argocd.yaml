@@ -27,6 +27,19 @@ applicationSet:
 configs:
   cm:
     timeout.reconciliation: 180s
+    # Argo CD stopped treating Applications as healthy-or-not in v1.8. Without this check,
+    # sync waves between Applications (projects -> platform -> app) do not wait.
+    resource.customizations.health.argoproj.io_Application: |
+      hs = {}
+      hs.status = "Progressing"
+      hs.message = ""
+      if obj.status ~= nil and obj.status.health ~= nil then
+        hs.status = obj.status.health.status
+        if obj.status.health.message ~= nil then
+          hs.message = obj.status.health.message
+        end
+      end
+      return hs
   params:
     server.insecure: true
 
