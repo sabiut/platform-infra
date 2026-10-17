@@ -18,7 +18,7 @@ plan_only=${PLAN_ONLY:-0}
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 case $stack in
-  bootstrap) dir=$root/bootstrap; varfile=""; key="" ;;
+  bootstrap) dir=$root/bootstrap; varfile=""; key="bootstrap.tfstate" ;;
   global)    dir=$root/global; varfile=$root/envs/$env/global.tfvars; key="$env/global.tfstate" ;;
   *)         dir=$root/stacks/$stack
              : "${region:?region is required for $stack}"
@@ -35,9 +35,7 @@ args=()
 [[ -n $varfile ]] && args+=(-var-file="$varfile")
 
 cd "$dir"
-if [[ $stack == bootstrap ]]; then
-  terraform init -input=false
-elif [[ $plan_only == 1 ]]; then
+if [[ $plan_only == 1 && $stack != bootstrap ]]; then
   [[ $action == plan ]] || { echo "PLAN_ONLY supports plan only" >&2; exit 1; }
   mkdir -p "$root/.planonly"
   cat > backend_override.tf <<HCL
@@ -48,7 +46,8 @@ HCL
   terraform init -input=false -reconfigure >/dev/null
 else
   rm -f backend_override.tf
-  terraform init -input=false -reconfigure \
+  # -migrate-state copies existing local state into S3 the first time (bootstrap).
+  terraform init -input=false -migrate-state -force-copy \
     -backend-config="bucket=$bucket" \
     -backend-config="key=$key" \
     -backend-config="region=$state_region" \

@@ -3,8 +3,10 @@ terraform {
   required_providers {
     aws = { source = "hashicorp/aws", version = "~> 6.60" }
   }
-  # Applied once by hand. Its state starts local; after the first apply, move it into the
-  # bucket it creates: add a backend "s3" block and run `terraform init -migrate-state`.
+  # Applied by hand. The very first apply has no bucket to store state in, so it runs with
+  # local state (comment this block out); then `scripts/tf.sh init bootstrap` moves the state
+  # into the bucket it created.
+  backend "s3" {}
 }
 
 provider "aws" {

@@ -34,9 +34,13 @@ resource "aws_ecr_replication_configuration" "this" {
           registry_id = data.aws_caller_identity.current.account_id
         }
       }
-      repository_filter {
-        filter      = "*"
-        filter_type = "PREFIX_MATCH"
+      # ECR has no wildcard here (filters need 2+ characters), so one prefix per repo.
+      dynamic "repository_filter" {
+        for_each = var.ecr_repositories
+        content {
+          filter      = repository_filter.value
+          filter_type = "PREFIX_MATCH"
+        }
       }
     }
   }
