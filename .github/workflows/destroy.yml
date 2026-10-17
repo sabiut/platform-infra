@@ -1,0 +1,83 @@
+# Tears a region down. Run by hand only: Actions > destroy > Run workflow, choose the
+# region(s), type "destroy", then approve in the "production" environment.
+#
+# Order matters: drain-cluster.sh first deletes the web app so the AWS Load Balancer
+# Controller removes the ALB (Terraform doesn't own it, and the VPC can't be deleted while
+# it exists). Then 40 -> 30 -> 20 -> 10. Global (ECR) and bootstrap are left alone.
+name: destroy
+
+on:
+  workflow_dispatch:
+    inputs:
+      regions:
+        description: Which regions to destroy
+        type: choice
+        options: [both, ap-southeast-2, eu-west-2]
+        default: both
+      confirm:
+        description: Type "destroy" to confirm
+        type: string
+        required: true
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: terraform
+  cancel-in-progress: false
+
+env:
+  TF_IN_AUTOMATION: "1"
+  TF_CLI_ARGS: "-no-color"
+
+jobs:
+  regions:
+    runs-on: ubuntu-latest
+    outputs:
+      list: ${{ steps.pick.outputs.list }}
+    steps:
+      - name: check confirmation
+        if: inputs.confirm != 'destroy'
+        run: |
+          echo "::error::Type destroy in the confirm box to run this workflow."
+          exit 1
+      - id: pick
+        run: |
+          case "${{ inputs.regions }}" in
+            both) echo 'list=["ap-southeast-2","eu-west-2"]' >> "$GITHUB_OUTPUT" ;;
+            *)    echo 'list=["${{ inputs.regions }}"]' >> "$GITHUB_OUTPUT" ;;
+          esac
+
+  destroy:
+    needs: regions
+    runs-on: ubuntu-latest
+    environment: production
+    strategy:
+      fail-fast: false
+      matrix:
+        region: ${{ fromJSON(needs.regions.outputs.list) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.16.6
+          terraform_wrapper: false
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.GHA_APPLY_ROLE_ARN }}
+          aws-region: ${{ matrix.region }}
+          role-duration-seconds: 7200
+      - name: drain (remove the ALB)
+        run: scripts/drain-cluster.sh ${{ matrix.region }}
+      - name: 40-argocd
+        run: scripts/tf.sh destroy 40-argocd ${{ matrix.region }}
+      - name: 30-data
+        run: scripts/tf.sh destroy 30-data ${{ matrix.region }}
+      - name: 20-eks
+        run: scripts/tf.sh destroy 20-eks ${{ matrix.region }}
+      - name: 10-network
+        run: scripts/tf.sh destroy 10-network ${{ matrix.region }}
+      - name: what's left
+        if: always()
+        run: REGIONS=${{ matrix.region }} scripts/aws-inventory.sh | tee -a "$GITHUB_STEP_SUMMARY"

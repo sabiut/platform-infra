@@ -49,7 +49,8 @@ Stacks read upstream outputs from S3 (`terraform_remote_state`), so apply them i
 | Workflow | When | Role | Does |
 |---|---|---|---|
 | `plan.yml` | pull request | `gha-plan` (read-only) | fmt, tflint, trivy, plan per stack and region, PR comments |
-| `apply.yml` | merge to `main` | `gha-plan`, then `gha-apply` after approval | plan all, wait for approval, apply in order |
+| `apply.yml` | merge to `main`, or Run workflow | `gha-plan`, then `gha-apply` after approval | plan all; approve; global; approve; both regions in parallel |
+| `destroy.yml` | Run workflow only (type `destroy`) | `gha-apply` after approval | drain the ALB, then destroy 40 -> 10 per region |
 | `drift.yml` | nightly | `gha-plan` | plan all, open an issue if anything changed outside Terraform |
 
 No AWS keys are stored anywhere: GitHub gets short-lived credentials through OIDC, and the

@@ -12,6 +12,10 @@ set -euo pipefail
 region=${1:?usage: drain-cluster.sh <region>}
 env=${ENVIRONMENT:-prod}
 cluster="$env-$region"
+if ! aws eks describe-cluster --region "$region" --name "$cluster" >/dev/null 2>&1; then
+  echo "No cluster $cluster: nothing to drain."
+  exit 0
+fi
 aws eks update-kubeconfig --region "$region" --name "$cluster" --alias "$cluster" >/dev/null
 k() { kubectl --context "$cluster" "$@"; }
 

@@ -1,29 +1,34 @@
-# Merge to main: plan everything (visible in the run summary), then wait for a reviewer on
-# the "production" environment, then apply in dependency order, one region at a time.
+# Builds or updates the platform. Runs on merge to main, or by hand (Actions > apply > Run
+# workflow).
 #
-# The apply job re-plans each stack just before applying it, because a downstream stack's
-# plan depends on what the upstream apply just produced. The reviewer approves after reading
-# the plan job's output.
+#   plan            read-only role; plans every stack (stacks whose upstream doesn't exist yet
+#                   are skipped with a note) and lists the results in the run summary
+#   apply-global    waits for approval in the "production" environment, then applies global
+#   apply-region    waits for approval again, then builds each region in its own job, in
+#                   parallel: 10-network -> 20-eks -> 30-data -> 40-argocd
+#
+# Each apply re-plans a stack just before applying it, because a downstream stack's plan
+# depends on what the upstream apply just produced.
 name: apply
 
 on:
   push:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   id-token: write
   contents: read
 
 concurrency:
-  group: terraform-apply
+  group: terraform
   cancel-in-progress: false
 
 env:
   AWS_REGION: ap-southeast-2
   TF_IN_AUTOMATION: "1"
   TF_CLI_ARGS: "-no-color"
-  REGIONS: "ap-southeast-2 eu-west-2"
-  STACKS: "10-network 20-eks 30-data 40-argocd"
+  TERRAFORM_VERSION: 1.16.6
 
 jobs:
   plan:
@@ -32,7 +37,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: 1.16.6
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
       - uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -41,14 +46,21 @@ jobs:
       - name: plan all
         run: |
           {
-            scripts/tf.sh plan global
-            for r in $REGIONS; do for s in $STACKS; do scripts/tf.sh plan $s $r; done; done
+            echo "## global"; scripts/tf.sh plan global
+            for r in ap-southeast-2 eu-west-2; do
+              for s in 10-network 20-eks 30-data 40-argocd; do
+                echo "## $s $r"; scripts/tf.sh plan $s $r
+              done
+            done
           } 2>&1 | tee plan.txt
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          grep -E '^(Plan:|No changes)' plan.txt >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo '### Plan summary'
+            echo '```'
+            grep -E '^(## |Plan:|No changes|Skipped)' plan.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
-  apply:
+  apply-global:
     needs: plan
     runs-on: ubuntu-latest
     environment: production   # required reviewer; also what the gha-apply role trusts
@@ -56,19 +68,52 @@ jobs:
       - uses: actions/checkout@v4
       - uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: 1.16.6
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.GHA_APPLY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
+      - run: scripts/tf.sh apply global
+
+  apply-region:
+    needs: apply-global
+    runs-on: ubuntu-latest
+    environment: production
+    strategy:
+      fail-fast: false        # a failure in one region doesn't cancel the other
+      matrix:
+        region: [ap-southeast-2, eu-west-2]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.GHA_APPLY_ROLE_ARN }}
+          aws-region: ${{ matrix.region }}
           role-duration-seconds: 7200
-      - name: apply global
-        run: scripts/tf.sh apply global
-      - name: apply regions in order
+      - name: 10-network
+        run: scripts/tf.sh apply 10-network ${{ matrix.region }}
+      - name: 20-eks
+        run: scripts/tf.sh apply 20-eks ${{ matrix.region }}
+      - name: 30-data
+        run: scripts/tf.sh apply 30-data ${{ matrix.region }}
+      - name: 40-argocd
+        run: scripts/tf.sh apply 40-argocd ${{ matrix.region }}
+      - name: hand-off values for the gitops repo
         run: |
-          for r in $REGIONS; do
-            echo "::group::$r"
-            for s in $STACKS; do scripts/tf.sh apply $s $r; done
-            echo "::endgroup::"
-          done
+          out() { terraform -chdir=stacks/30-data output -raw "$1"; }
+          scripts/tf.sh init 30-data ${{ matrix.region }} >/dev/null
+          host=$(out db_endpoint)
+          {
+            echo "### ${{ matrix.region }}: values for gitops envs/prod/${{ matrix.region }}/values/backend.yaml"
+            echo '```yaml'
+            echo "database.host: ${host%:*}"
+            echo "secrets.dbSecretName: $(out db_master_secret_arn)"
+            echo "media.bucket: $(out media_bucket)"
+            echo '```'
+            echo "Or run \`scripts/gitops-handoff.sh ${{ matrix.region }}\` locally."
+          } >> "$GITHUB_STEP_SUMMARY"

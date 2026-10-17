@@ -9,12 +9,12 @@ Everything that costs money is in steps 2-4 and is removed in step 7. Run
 | Step | Sydney and London | Time |
 |---|---|---|
 | 1. Images | GitLab pipelines push to ECR Sydney; ECR copies to London | 5 min |
-| 2. Network + EKS + data | Terraform, both regions in parallel | 25-30 min |
+| 2. Build | GitHub Actions `apply`: global, then both regions in parallel | 35-40 min |
 | 3. Hand-off | Database outputs into the gitops repo | 2 min |
-| 4. Argo CD | Terraform installs it; it deploys the rest | 10 min |
+| 4. Argo CD | Already installed by step 2; it deploys the rest | 10 min |
 | 5. Look around | Two ALB URLs, two Argo CDs | as long as you like |
 | 6. Region-by-region release | Merge for Sydney, then promote to London | 15 min |
-| 7. Teardown | Drain, then destroy 40 -> 30 -> 20 -> 10 | 20-25 min |
+| 7. Teardown | GitHub Actions `destroy`: drain, then 40 -> 30 -> 20 -> 10 | 20-25 min |
 
 ## 1. Images (no AWS infrastructure)
 
@@ -23,20 +23,24 @@ Each pushes `<short sha>` to ECR and opens a release MR in `gitops`. Don't merge
 
     aws ecr list-images --region eu-west-2 --repository-name backend   # replicated copy
 
-## 2. Network, EKS, data (both regions at once)
+## 2. Build with GitHub Actions
 
-Two terminals, one per region. Each `apply` shows the plan and asks for `yes`.
+GitHub > `platform-infra` > Actions > **apply** > **Run workflow** (branch `main`).
 
-    # terminal 1                                   # terminal 2
-    scripts/tf.sh apply 10-network ap-southeast-2  scripts/tf.sh apply 10-network eu-west-2
-    scripts/tf.sh apply 20-eks ap-southeast-2      scripts/tf.sh apply 20-eks eu-west-2      # ~15 min
-    scripts/tf.sh apply 30-data ap-southeast-2     scripts/tf.sh apply 30-data eu-west-2     # ~10 min
+1. **plan** (read-only role): plans every stack. Before the first build, the stacks that
+   depend on others show "Skipped: needs 10-network". The run summary lists every result.
+2. **apply-global** pauses: **Review deployments** > tick `production` > **Approve**.
+   It applies the global stack (ECR; usually no changes).
+3. **apply-region** pauses again; approve once and **two jobs start, one per region, in
+   parallel**. Each runs 10-network -> 20-eks (~15 min) -> 30-data (~10 min) -> 40-argocd.
 
-Same code, different tfvars: that's the whole multi-region pattern on the infra side.
+Same code, different tfvars, one job per region: that's the multi-region pattern on the
+infra side. Open the two jobs side by side to watch the regions build independently.
 
 ## 3. Hand-off to gitops
 
-The database host, RDS secret and media bucket only exist now. Write them into gitops:
+The database host, RDS secret and media bucket only exist now. The apply run's summary lists
+them per region; to write them into gitops:
 
     scripts/gitops-handoff.sh ap-southeast-2
     scripts/gitops-handoff.sh eu-west-2
@@ -44,10 +48,9 @@ The database host, RDS secret and media bucket only exist now. Write them into g
 
 ## 4. Argo CD
 
-    scripts/tf.sh apply 40-argocd ap-southeast-2   scripts/tf.sh apply 40-argocd eu-west-2
-
-Terraform installs Argo CD and one root Application per cluster, pointing at that region's
-folder. From here Argo CD deploys everything: projects, add-ons, then the web app.
+Step 2's last job, 40-argocd, installed Argo CD and one root Application per cluster,
+pointing at that region's folder. From there Argo CD deploys everything: projects, add-ons,
+then the web app. To look at it from your laptop (your IAM user is a cluster admin):
 
     aws eks update-kubeconfig --region ap-southeast-2 --name prod-ap-southeast-2 --alias syd
     aws eks update-kubeconfig --region eu-west-2 --name prod-eu-west-2 --alias lon
@@ -78,17 +81,20 @@ The backend can't start yet: its image tag is still `pending-first-build`. That'
    Open and merge the MR. London deploys the same images, pulled from London's ECR.
 4. Try a rollback in one region: revert the London MR and watch only London go back.
 
-## 7. Teardown (both regions, in this order)
+## 7. Teardown with GitHub Actions
 
-    scripts/drain-cluster.sh ap-southeast-2        scripts/drain-cluster.sh eu-west-2
-    scripts/tf.sh destroy 40-argocd ap-southeast-2 scripts/tf.sh destroy 40-argocd eu-west-2
-    scripts/tf.sh destroy 30-data ap-southeast-2   scripts/tf.sh destroy 30-data eu-west-2
-    scripts/tf.sh destroy 20-eks ap-southeast-2    scripts/tf.sh destroy 20-eks eu-west-2
-    scripts/tf.sh destroy 10-network ap-southeast-2 scripts/tf.sh destroy 10-network eu-west-2
-    scripts/aws-inventory.sh
+GitHub > Actions > **destroy** > **Run workflow**: regions `both`, type `destroy`, run, then
+approve `production`. One job per region:
+
+1. `drain-cluster.sh`: delete the web app so the AWS Load Balancer Controller removes the ALB
+2. destroy 40-argocd -> 30-data -> 20-eks -> 10-network
+3. list what's left in that region (should be only ECR)
 
 Why drain first: the ALB is created by a Kubernetes controller, not by Terraform. Destroy the
 cluster first and nothing deletes the ALB, and the VPC can't be destroyed with it inside.
+
+From a laptop instead: `scripts/drain-cluster.sh <region>`, then `scripts/tf.sh destroy` for
+40, 30, 20, 10. Afterwards `scripts/aws-inventory.sh` shows what exists.
 
 Then reset the hand-off values in gitops (`git revert` the hand-off commit) so the next lab
 starts clean.

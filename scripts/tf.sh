@@ -81,6 +81,7 @@ case $action in
   apply) # In CI the approval is the GitHub "production" environment, so don't prompt.
          [[ ${CI:-} == true ]] && args+=(-auto-approve)
          terraform apply -input=false "${args[@]}" ;;
-  destroy) terraform destroy -input=false "${args[@]}" ;;
+  destroy) [[ ${CI:-} == true ]] && args+=(-auto-approve)
+           terraform destroy -input=false "${args[@]}" ;;
   *)     echo "unknown action: $action" >&2; exit 1 ;;
 esac
