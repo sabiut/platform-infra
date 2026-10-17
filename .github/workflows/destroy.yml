@@ -3,7 +3,8 @@
 #
 # Order matters: drain-cluster.sh first deletes the web app so the AWS Load Balancer
 # Controller removes the ALB (Terraform doesn't own it, and the VPC can't be deleted while
-# it exists). Then 40 -> 30 -> 20 -> 10. Global (ECR) and bootstrap are left alone.
+# it exists). Then 40 -> 30 -> 20 -> 10. The foundation (state bucket, CI roles, ECR)
+# is left alone; take it down from a laptop with scripts/foundation.sh down.
 name: destroy
 
 on:

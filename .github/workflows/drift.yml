@@ -36,13 +36,11 @@ jobs:
           drifted=""
           check() {
             scripts/tf.sh plan "$@" > /dev/null
-            dir=$([[ $1 == global ]] && echo global || echo "stacks/$1")
-            n=$(terraform -chdir="$dir" show -json tfplan |
+            n=$(terraform -chdir="stacks/$1" show -json tfplan |
                 jq '[.resource_changes[]? | select(.change.actions != ["no-op"] and .change.actions != ["read"])] | length')
             [[ $n -gt 0 ]] && drifted+="- \`$*\`: $n resource(s) differ"$'\n'
             true
           }
-          check global
           for r in ap-southeast-2 eu-west-2; do
             for s in 10-network 20-eks 30-data 40-argocd; do check $s $r; done
           done

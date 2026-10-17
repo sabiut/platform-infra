@@ -40,7 +40,6 @@ jobs:
       fail-fast: false
       matrix:
         target:
-          - global
           - 10-network ap-southeast-2
           - 20-eks ap-southeast-2
           - 30-data ap-southeast-2

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# What this project has in AWS right now. After a teardown, only the bootstrap and global
-# rows should show anything.
+# What this project has in AWS right now. After destroying the regions, only the foundation
+# rows (state bucket, OIDC, CI roles, ECR) show anything; after foundation.sh down, nothing.
 set -uo pipefail
 acct=$(aws sts get-caller-identity --query Account --output text)
 echo "State bucket:   $(aws s3api list-buckets --query 'Buckets[?starts_with(Name, `eks-gitops`)].Name' --output text)"

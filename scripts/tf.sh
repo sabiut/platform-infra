@@ -3,7 +3,6 @@
 #
 #   scripts/tf.sh plan  20-eks ap-southeast-2       real remote state in S3
 #   scripts/tf.sh apply 20-eks ap-southeast-2
-#   scripts/tf.sh plan  global
 #   PLAN_ONLY=1 scripts/tf.sh plan 30-data eu-west-2
 #   scripts/tf.sh destroy 20-eks ap-southeast-2     asks for confirmation
 #
@@ -12,31 +11,27 @@
 set -euo pipefail
 
 action=${1:?usage: tf.sh <init|plan|apply|destroy> <stack> [region]}
-stack=${2:?stack: bootstrap, global, 10-network, 20-eks, 30-data, 40-argocd}
+stack=${2:?stack: 10-network, 20-eks, 30-data, 40-argocd}
 region=${3:-}
 env=${ENVIRONMENT:-prod}
 plan_only=${PLAN_ONLY:-0}
 
 root=$(cd "$(dirname "$0")/.." && pwd)
-case $stack in
-  bootstrap) dir=$root/bootstrap; varfile=""; key="bootstrap.tfstate" ;;
-  global)    dir=$root/global; varfile=$root/envs/$env/global.tfvars; key="$env/global.tfstate" ;;
-  *)         dir=$root/stacks/$stack
-             : "${region:?region is required for $stack}"
-             varfile=$root/envs/$env/$region/$stack.tfvars
-             key="$env/$region/$stack.tfstate" ;;
-esac
+# The foundation (state bucket, CI roles, ECR) is separate: scripts/foundation.sh.
+dir=$root/stacks/$stack
+: "${region:?region is required for $stack}"
+varfile=$root/envs/$env/$region/$stack.tfvars
+key="$env/$region/$stack.tfstate"
 [[ -d $dir ]] || { echo "no such stack: $stack" >&2; exit 1; }
 
 state_region=ap-southeast-2
 account=$(aws sts get-caller-identity --query Account --output text)
 bucket="eks-gitops-tfstate-$account"
 
-args=()
-[[ -n $varfile ]] && args+=(-var-file="$varfile")
+args=(-var-file="$varfile")
 
 cd "$dir"
-if [[ $plan_only == 1 && $stack != bootstrap ]]; then
+if [[ $plan_only == 1 ]]; then
   [[ $action == plan ]] || { echo "PLAN_ONLY supports plan only" >&2; exit 1; }
   mkdir -p "$root/.planonly"
   cat > backend_override.tf <<HCL
@@ -47,8 +42,7 @@ HCL
   terraform init -input=false -reconfigure >/dev/null
 else
   rm -f backend_override.tf
-  # -migrate-state copies existing local state into S3 the first time (bootstrap).
-  terraform init -input=false -migrate-state -force-copy \
+  terraform init -input=false -reconfigure \
     -backend-config="bucket=$bucket" \
     -backend-config="key=$key" \
     -backend-config="region=$state_region" \

@@ -3,9 +3,12 @@
 #
 #   plan            read-only role; plans every stack (stacks whose upstream doesn't exist yet
 #                   are skipped with a note) and lists the results in the run summary
-#   apply-global    waits for approval in the "production" environment, then applies global
-#   apply-region    waits for approval again, then builds each region in its own job, in
-#                   parallel: 10-network -> 20-eks -> 30-data -> 40-argocd
+#   apply-region    waits for approval in the "production" environment, then builds each
+#                   region in its own job, in parallel: 10-network -> 20-eks -> 30-data ->
+#                   40-argocd
+#
+# The foundation (state bucket, these CI roles, ECR) must already be up: it's applied from a
+# laptop with scripts/foundation.sh, not here.
 #
 # Each apply re-plans a stack just before applying it, because a downstream stack's plan
 # depends on what the upstream apply just produced.
@@ -46,7 +49,6 @@ jobs:
       - name: plan all
         run: |
           {
-            echo "## global"; scripts/tf.sh plan global
             for r in ap-southeast-2 eu-west-2; do
               for s in 10-network 20-eks 30-data 40-argocd; do
                 echo "## $s $r"; scripts/tf.sh plan $s $r
@@ -60,24 +62,8 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-  apply-global:
-    needs: plan
-    runs-on: ubuntu-latest
-    environment: production   # required reviewer; also what the gha-apply role trusts
-    steps:
-      - uses: actions/checkout@v4
-      - uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: ${{ env.TERRAFORM_VERSION }}
-          terraform_wrapper: false
-      - uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ vars.GHA_APPLY_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
-      - run: scripts/tf.sh apply global
-
   apply-region:
-    needs: apply-global
+    needs: plan
     runs-on: ubuntu-latest
     environment: production
     strategy:

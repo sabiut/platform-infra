@@ -10,8 +10,7 @@ Design and reasoning: `eks-gitops-platform/docs/design.html`.
 
 | Path | State key | Creates |
 |---|---|---|
-| `bootstrap/` | local, then moved to S3 | State bucket, GitHub + GitLab OIDC providers, `gha-plan`, `gha-apply`, `gitlab-<app>-push` roles |
-| `global/` | `prod/global.tfstate` | ECR repos, replication to the other regions, Route 53 zone (once there's a domain) |
+| `foundation/` | local (`foundation/terraform.tfstate`, gitignored) | State bucket, GitHub + GitLab OIDC providers, `gha-plan`, `gha-apply`, `gitlab-<app>-push` roles, ECR repos in both regions with replication, Route 53 zone (once there's a domain) |
 | `stacks/10-network/` | `prod/<region>/10-network.tfstate` | VPC over 3 AZs, public/private/database subnets, NAT per AZ, VPC endpoints |
 | `stacks/20-eks/` | `prod/<region>/20-eks.tfstate` | EKS 1.37, managed node group, add-ons, access entries, Pod Identity roles for add-ons |
 | `stacks/30-data/` | `prod/<region>/30-data.tfstate` | RDS PostgreSQL 17 Multi-AZ, media bucket, Django secret, backend Pod Identity |
@@ -19,7 +18,21 @@ Design and reasoning: `eks-gitops-platform/docs/design.html`.
 | `envs/prod/` | | Settings per region, one tfvars file per stack |
 
 Stacks read upstream outputs from S3 (`terraform_remote_state`), so apply them in order:
-`global`, then per region `10 → 20 → 30 → 40`.
+the foundation, then per region `10 → 20 → 30 → 40`.
+
+## Two lifecycles
+
+| | Foundation | Regions |
+|---|---|---|
+| What | state bucket, CI roles, ECR | VPC, EKS, RDS, Argo CD per region |
+| Cost while up | cents a month | about US$1 an hour for both regions |
+| Run from | your laptop: `make foundation-up` / `make foundation-down` | GitHub Actions: `apply` / `destroy` |
+| Why there | it creates the bucket and the roles CI signs in with, so CI can't create it | everything goes through review and the `production` approval |
+
+Bring the foundation up when you start working on the project and take it down when you're
+done. `foundation-down` refuses while any region state in the bucket still has resources, so
+destroy the regions first. Role names and the bucket name are fixed, so the GitHub variables
+and GitLab CI settings stay valid across rebuilds.
 
 ## Running
 
@@ -33,23 +46,22 @@ Stacks read upstream outputs from S3 (`terraform_remote_state`), so apply them i
 
 ## First-time setup
 
-1. `cd bootstrap && terraform apply` with your own AWS credentials. Then add a `backend "s3"`
-   block pointing at the new bucket and run `terraform init -migrate-state`.
+1. `make foundation-up` with your own AWS credentials.
 2. In the GitHub repo settings:
-   - Variables: `GHA_PLAN_ROLE_ARN` and `GHA_APPLY_ROLE_ARN` (bootstrap outputs).
+   - Variables: `GHA_PLAN_ROLE_ARN` and `GHA_APPLY_ROLE_ARN` (foundation outputs).
    - Environment `production` with a required reviewer.
    - Branch protection on `main`: pull requests only, `plan` must pass.
 3. In each region, create the Secrets Manager secret `platform/gitops-repo` holding a GitLab
    deploy token with `read_repository`: `{"username": "...", "password": "..."}`.
 4. Open a pull request. The plan appears as comments. Merge it, approve the `production`
-   deployment, and the apply runs global, Sydney, then London.
+   deployment, and the apply builds Sydney and London in parallel.
 
 ## Pipelines
 
 | Workflow | When | Role | Does |
 |---|---|---|---|
 | `plan.yml` | pull request | `gha-plan` (read-only) | fmt, tflint, trivy, plan per stack and region, PR comments |
-| `apply.yml` | merge to `main`, or Run workflow | `gha-plan`, then `gha-apply` after approval | plan all; approve; global; approve; both regions in parallel |
+| `apply.yml` | merge to `main`, or Run workflow | `gha-plan`, then `gha-apply` after approval | plan all; approve; both regions in parallel |
 | `destroy.yml` | Run workflow only (type `destroy`) | `gha-apply` after approval | drain the ALB, then destroy 40 -> 10 per region |
 | `drift.yml` | nightly | `gha-plan` | plan all, open an issue if anything changed outside Terraform |
 
@@ -67,6 +79,7 @@ region-by-region release, and tear it all down. `scripts/aws-inventory.sh` shows
 ## Destroy
 
 Per region: `scripts/drain-cluster.sh <region>` (removes the ALB, which Terraform doesn't
-own), then `scripts/tf.sh destroy` for `40 → 30 → 20 → 10`, then `global`. With the
+own), then `scripts/tf.sh destroy` for `40 → 30 → 20 → 10`. Then, when finished with the
+project, `make foundation-down`. With the
 production values, set `db_deletion_protection = false` and apply `30-data` first, or RDS
 refuses to be deleted (a final snapshot is still taken).

@@ -8,13 +8,20 @@ Everything that costs money is in steps 2-4 and is removed in step 7. Run
 
 | Step | Sydney and London | Time |
 |---|---|---|
+| 0. Foundation | `make foundation-up` from your laptop (bucket, CI roles, ECR in both regions) | 1 min |
 | 1. Images | GitLab pipelines push to ECR Sydney; ECR copies to London | 5 min |
-| 2. Build | GitHub Actions `apply`: global, then both regions in parallel | 35-40 min |
+| 2. Build | GitHub Actions `apply`: both regions in parallel | 35-40 min |
 | 3. Hand-off | Database outputs into the gitops repo | 2 min |
 | 4. Argo CD | Already installed by step 2; it deploys the rest | 10 min |
 | 5. Look around | Two ALB URLs, two Argo CDs | as long as you like |
 | 6. Region-by-region release | Merge for Sydney, then promote to London | 15 min |
 | 7. Teardown | GitHub Actions `destroy`: drain, then 40 -> 30 -> 20 -> 10 | 20-25 min |
+
+## 0. Foundation (laptop, costs cents)
+
+    make foundation-up      # shows the plan, type yes
+
+Skip it if it's already up (`scripts/aws-inventory.sh` shows the bucket and CI roles).
 
 ## 1. Images (no AWS infrastructure)
 
@@ -29,10 +36,8 @@ GitHub > `platform-infra` > Actions > **apply** > **Run workflow** (branch `main
 
 1. **plan** (read-only role): plans every stack. Before the first build, the stacks that
    depend on others show "Skipped: needs 10-network". The run summary lists every result.
-2. **apply-global** pauses: **Review deployments** > tick `production` > **Approve**.
-   It applies the global stack (ECR; usually no changes).
-3. **apply-region** pauses again; approve once and **two jobs start, one per region, in
-   parallel**. Each runs 10-network -> 20-eks (~15 min) -> 30-data (~10 min) -> 40-argocd.
+2. **apply-region** pauses: **Review deployments** > tick `production` > **Approve**.
+   **Two jobs start, one per region, in parallel**. Each runs 10-network -> 20-eks (~15 min) -> 30-data (~10 min) -> 40-argocd.
 
 Same code, different tfvars, one job per region: that's the multi-region pattern on the
 infra side. Open the two jobs side by side to watch the regions build independently.
@@ -98,6 +103,11 @@ From a laptop instead: `scripts/drain-cluster.sh <region>`, then `scripts/tf.sh 
 
 Then reset the hand-off values in gitops (`git revert` the hand-off commit) so the next lab
 starts clean.
+
+Finished with the project for now? Take the foundation down too (deletes the images):
+
+    make foundation-down    # refuses if a region still has resources
+    scripts/aws-inventory.sh   # everything empty
 
 ## What to say about it in an interview
 
