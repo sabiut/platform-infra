@@ -10,7 +10,9 @@ public_access_cidrs = ["0.0.0.0/0"]
 admin_principal_arns  = ["arn:aws:iam::827602717118:user/sabiut"]
 viewer_principal_arns = []
 
-node_instance_types = ["t3.large"] # lab profile: ["t3.medium"]
+# LAB PROFILE (prod: t3.large, 3-6). Three nodes, one per AZ: Argo CD's HA Redis needs
+# three nodes for its anti-affinity.
+node_instance_types = ["t3.medium"]
 node_min_size       = 3
-node_max_size       = 6
+node_max_size       = 4
 node_desired_size   = 3

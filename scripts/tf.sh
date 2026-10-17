@@ -5,12 +5,13 @@
 #   scripts/tf.sh apply 20-eks ap-southeast-2
 #   scripts/tf.sh plan  global
 #   PLAN_ONLY=1 scripts/tf.sh plan 30-data eu-west-2
+#   scripts/tf.sh destroy 20-eks ap-southeast-2     asks for confirmation
 #
 # PLAN_ONLY=1 plans before anything exists: local throwaway state, and downstream stacks get
 # placeholder inputs instead of reading other stacks' state. It can't apply.
 set -euo pipefail
 
-action=${1:?usage: tf.sh <init|plan|apply> <stack> [region]}
+action=${1:?usage: tf.sh <init|plan|apply|destroy> <stack> [region]}
 stack=${2:?stack: bootstrap, global, 10-network, 20-eks, 30-data, 40-argocd}
 region=${3:-}
 env=${ENVIRONMENT:-prod}
@@ -57,11 +58,29 @@ else
   [[ $stack =~ ^(20|30|40)- ]] && args+=(-var="state_bucket=$bucket")
 fi
 
+# A downstream stack can't be planned before its upstream exists (nothing to read). Say so
+# and stop cleanly instead of failing, so pipeline plans stay green before the first build.
+case $stack in
+  20-eks)    upstream="10-network" ;;
+  30-data)   upstream="10-network 20-eks" ;;
+  40-argocd) upstream="20-eks" ;;
+  *)         upstream="" ;;
+esac
+if [[ $plan_only != 1 && $action == plan ]]; then
+  for u in $upstream; do
+    if ! aws s3api head-object --bucket "$bucket" --key "$env/$region/$u.tfstate" >/dev/null 2>&1; then
+      echo "Skipped: $stack in $region needs $u, which hasn't been applied in $region yet."
+      exit 0
+    fi
+  done
+fi
+
 case $action in
   init)  ;;
   plan)  terraform plan -input=false -out="$dir/tfplan" "${args[@]}" ;;
   apply) # In CI the approval is the GitHub "production" environment, so don't prompt.
          [[ ${CI:-} == true ]] && args+=(-auto-approve)
          terraform apply -input=false "${args[@]}" ;;
+  destroy) terraform destroy -input=false "${args[@]}" ;;
   *)     echo "unknown action: $action" >&2; exit 1 ;;
 esac

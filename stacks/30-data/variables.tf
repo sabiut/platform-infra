@@ -35,6 +35,18 @@ variable "db_deletion_protection" {
   default     = true
 }
 
+variable "skip_final_snapshot" {
+  description = "true only for throwaway lab databases"
+  type        = bool
+  default     = false
+}
+
+variable "secret_recovery_window_days" {
+  description = "0 deletes secrets immediately, so a lab can be rebuilt with the same names"
+  type        = number
+  default     = 7
+}
+
 variable "app_namespace" {
   description = "Kubernetes namespace the backend runs in"
   type        = string

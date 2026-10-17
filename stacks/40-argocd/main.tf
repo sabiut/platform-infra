@@ -17,16 +17,18 @@ resource "helm_release" "argocd" {
 # GitLab deploy token for the gitops repo. Read as an ephemeral value and written with a
 # write-only attribute, so the token never lands in Terraform state.
 ephemeral "aws_secretsmanager_secret_version" "gitops_repo" {
-  count     = local.plan_only ? 0 : 1
+  count     = local.plan_only || !local.private_repo ? 0 : 1
   secret_id = var.gitops_repo_secret_name
 }
 
 locals {
+  private_repo = var.gitops_repo_secret_name != ""
   gitops_creds = try(jsondecode(ephemeral.aws_secretsmanager_secret_version.gitops_repo[0].secret_string),
   { username = "PLANONLY", password = "PLANONLY" })
 }
 
 resource "kubernetes_secret_v1" "gitops_repo" {
+  count = local.private_repo ? 1 : 0
   metadata {
     name      = "repo-gitops"
     namespace = "argocd"
@@ -73,5 +75,5 @@ resource "helm_release" "root_app" {
     }
   })]
 
-  depends_on = [kubernetes_secret_v1.gitops_repo]
+  depends_on = [helm_release.argocd, kubernetes_secret_v1.gitops_repo]
 }

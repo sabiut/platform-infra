@@ -31,7 +31,10 @@ variable "gitops_repo_url" {
 }
 
 variable "gitops_repo_secret_name" {
-  description = "Secrets Manager secret holding a GitLab deploy token as {\"username\":...,\"password\":...}"
+  description = <<-EOT
+    Secrets Manager secret holding a GitLab deploy token as {"username":...,"password":...}.
+    Empty = no credentials, for a public gitops repo.
+  EOT
   type        = string
   default     = "platform/gitops-repo"
 }

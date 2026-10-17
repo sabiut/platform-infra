@@ -57,11 +57,15 @@ apply role only trusts jobs in the approved `production` environment.
 
 ## Lab profile
 
-The comments in `envs/prod/*/*.tfvars` show cheaper values: one NAT gateway, `t3.medium`
-nodes, single-AZ `db.t4g.micro`. Use them for practice runs, and destroy afterwards.
+`envs/prod/*/*.tfvars` currently hold the **lab profile** (marked `LAB PROFILE`, with the
+production values in the comments): one NAT gateway, no interface endpoints, 3 × `t3.medium`,
+single-AZ `db.t4g.micro` without deletion protection. Follow
+[docs/multi-region-lab.md](docs/multi-region-lab.md) to build both regions, run a
+region-by-region release, and tear it all down. `scripts/aws-inventory.sh` shows what exists.
 
 ## Destroy
 
-Reverse order, per region: `40 → 30 → 20 → 10`, then `global`. Set
-`db_deletion_protection = false` and apply `30-data` first, or RDS refuses to be deleted
-(a final snapshot is still taken).
+Per region: `scripts/drain-cluster.sh <region>` (removes the ALB, which Terraform doesn't
+own), then `scripts/tf.sh destroy` for `40 → 30 → 20 → 10`, then `global`. With the
+production values, set `db_deletion_protection = false` and apply `30-data` first, or RDS
+refuses to be deleted (a final snapshot is still taken).

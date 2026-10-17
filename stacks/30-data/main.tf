@@ -50,7 +50,7 @@ module "db" {
 
   backup_retention_period          = 7
   deletion_protection              = var.db_deletion_protection
-  skip_final_snapshot              = false
+  skip_final_snapshot              = var.skip_final_snapshot
   final_snapshot_identifier_prefix = "${local.name}-webapp-final"
   copy_tags_to_snapshot            = true
 
@@ -93,7 +93,7 @@ resource "aws_s3_bucket_public_access_block" "media" {
 
 resource "aws_secretsmanager_secret" "django" {
   name                    = "${var.environment}/webapp/django"
-  recovery_window_in_days = 7
+  recovery_window_in_days = var.secret_recovery_window_days
 }
 
 ephemeral "random_password" "django_secret_key" {
