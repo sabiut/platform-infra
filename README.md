@@ -68,14 +68,6 @@ and GitLab CI settings stay valid across rebuilds.
 No AWS keys are stored anywhere: GitHub gets short-lived credentials through OIDC, and the
 apply role only trusts jobs in the approved `production` environment.
 
-## Lab profile
-
-`envs/prod/*/*.tfvars` currently hold the **lab profile** (marked `LAB PROFILE`, with the
-production values in the comments): one NAT gateway, no interface endpoints, 3 × `t3.medium`,
-single-AZ `db.t4g.micro` without deletion protection. Follow
-[docs/multi-region-lab.md](docs/multi-region-lab.md) to build both regions, run a
-region-by-region release, and tear it all down. `scripts/aws-inventory.sh` shows what exists.
-
 ## Destroy
 
 Per region: `scripts/drain-cluster.sh <region>` (removes the ALB, which Terraform doesn't
