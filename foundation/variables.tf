@@ -13,6 +13,17 @@ variable "github_repo" {
   type        = string
 }
 
+variable "github_sub_prefix" {
+  description = <<-EOT
+    The repo's OIDC subject prefix when GitHub uses immutable subjects, e.g.
+    "repo:owner@123/name@456". Find it with:
+    gh api repos/<owner>/<name>/actions/oidc/customization/sub --jq .sub_claim_prefix
+    Empty = the classic "repo:<owner>/<name>".
+  EOT
+  type        = string
+  default     = ""
+}
+
 variable "gitlab_namespace" {
   description = "GitLab group or user that owns the app repos"
   type        = string

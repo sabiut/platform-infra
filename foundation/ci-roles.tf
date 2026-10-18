@@ -25,8 +25,8 @@ data "aws_iam_policy_document" "gha_plan_trust" {
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
       values = [
-        "repo:${var.github_repo}:pull_request",
-        "repo:${var.github_repo}:ref:refs/heads/main",
+        "${local.github_sub}:pull_request",
+        "${local.github_sub}:ref:refs/heads/main",
       ]
     }
   }
@@ -75,7 +75,7 @@ data "aws_iam_policy_document" "gha_apply_trust" {
     condition {
       test     = "StringEquals"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:${var.github_repo}:environment:production"]
+      values   = ["${local.github_sub}:environment:production"]
     }
   }
 }

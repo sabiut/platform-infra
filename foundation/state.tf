@@ -3,6 +3,9 @@ data "aws_caller_identity" "current" {}
 locals {
   account_id   = data.aws_caller_identity.current.account_id
   state_bucket = "eks-gitops-tfstate-${local.account_id}"
+  # What GitHub puts before ":pull_request", ":ref:..." or ":environment:..." in the OIDC
+  # token's sub claim. Repos using immutable subjects send owner and repo IDs as well.
+  github_sub = var.github_sub_prefix != "" ? var.github_sub_prefix : "repo:${var.github_repo}"
 }
 
 # State for the region stacks (prod/<region>/<stack>.tfstate). The foundation's own state is
