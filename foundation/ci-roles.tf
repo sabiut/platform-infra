@@ -83,6 +83,9 @@ data "aws_iam_policy_document" "gha_apply_trust" {
 resource "aws_iam_role" "gha_apply" {
   name               = "gha-apply"
   assume_role_policy = data.aws_iam_policy_document.gha_apply_trust.json
+  # A region build (EKS, then RDS) can outlast the default 1-hour session; the workflows ask
+  # for 2 hours (role-duration-seconds: 7200).
+  max_session_duration = 7200
 }
 
 # Broad on purpose: this role creates VPCs, clusters and IAM roles. The guard is the trust
