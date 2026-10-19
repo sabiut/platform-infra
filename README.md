@@ -53,7 +53,10 @@ and GitLab CI settings stay valid across rebuilds.
    - Branch protection on `main`: pull requests only, `plan` must pass.
 3. In each region, create the Secrets Manager secret `platform/gitops-repo` holding a GitLab
    deploy token with `read_repository`: `{"username": "...", "password": "..."}`.
-4. Open a pull request. The plan appears as comments. Merge it, approve the `production`
+4. For the Argo CD UI over Tailscale: in each region, create the Secrets Manager secret
+   `prod/platform/tailscale-operator` holding a Tailscale OAuth client:
+   `{"client_id": "...", "client_secret": "..."}`. The tailnet setup is in the gitops README.
+5. Open a pull request. The plan appears as comments. Merge it, approve the `production`
    deployment, and the apply builds Sydney and London in parallel.
 
 ## Pipelines

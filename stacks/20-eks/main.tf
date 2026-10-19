@@ -141,9 +141,11 @@ module "pod_identity" {
   attach_cluster_autoscaler_policy = lookup(each.value.policy, "attach_cluster_autoscaler_policy", false)
   cluster_autoscaler_cluster_names = [local.name]
   attach_external_secrets_policy   = lookup(each.value.policy, "attach_external_secrets_policy", false)
-  # The app's own secrets, plus the RDS-managed master password secret.
+  # The app's own secrets, platform secrets (the Tailscale operator's OAuth client), and the
+  # RDS-managed master password secret.
   external_secrets_secrets_manager_arns = [
     "arn:aws:secretsmanager:${var.region}:${local.account_id}:secret:${var.environment}/webapp/*",
+    "arn:aws:secretsmanager:${var.region}:${local.account_id}:secret:${var.environment}/platform/*",
     "arn:aws:secretsmanager:${var.region}:${local.account_id}:secret:rds!*",
   ]
   external_secrets_create_permission = false

@@ -4,8 +4,13 @@
 # cluster is destroyed first, nothing deletes the ALB, and the VPC can't be destroyed
 # because the ALB is still in it.
 #
-# Order: stop Argo CD re-creating things, delete the web app (Ingress -> ALB), wait until AWS
-# shows no ALB for this cluster, then Terraform can destroy 40 -> 30 -> 20 -> 10.
+# The Argo CD UI's Tailscale device is the same kind of thing: the Tailscale operator removes
+# it from the tailnet only when its Service is deleted, so the name (argocd-syd) is free for
+# the next build.
+#
+# Order: stop Argo CD re-creating things, take the Argo CD UI off the tailnet, delete the web
+# app (Ingress -> ALB), wait until AWS shows no ALB for this cluster, then Terraform can
+# destroy 40 -> 30 -> 20 -> 10.
 #
 #   scripts/drain-cluster.sh ap-southeast-2
 set -euo pipefail
@@ -19,15 +24,20 @@ fi
 aws eks update-kubeconfig --region "$region" --name "$cluster" --alias "$cluster" >/dev/null
 k() { kubectl --context "$cluster" "$@"; }
 
-echo "1/3 Stop the root app from re-creating what we delete"
+echo "1/4 Stop Argo CD re-creating what we delete"
 k -n argocd patch application root --type merge -p '{"spec":{"syncPolicy":null}}' || true
+k -n argocd patch application tailscale --type merge -p '{"spec":{"syncPolicy":null}}' 2>/dev/null || true
 
-echo "2/3 Delete the web app; the Ingress finalizer makes the controller delete the ALB"
+echo "2/4 Take the Argo CD UI off the tailnet (the operator removes the device, then the finalizer)"
+k -n argocd delete service argocd-server-tailnet --ignore-not-found --wait=true --timeout=3m || \
+  echo "  Still there after 3 minutes; remove the argocd device in the Tailscale admin console." >&2
+
+echo "3/4 Delete the web app; the Ingress finalizer makes the controller delete the ALB"
 for app in ingress frontend backend; do
   k -n argocd delete application "$app" --ignore-not-found --wait=true --timeout=5m
 done
 
-echo "3/3 Wait until AWS has no load balancer for $cluster"
+echo "4/4 Wait until AWS has no load balancer for $cluster"
 for i in $(seq 1 60); do
   n=$(aws resourcegroupstaggingapi get-resources --region "$region" \
         --resource-type-filters elasticloadbalancing:loadbalancer \
