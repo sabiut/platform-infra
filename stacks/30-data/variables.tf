@@ -57,3 +57,31 @@ variable "secret_key_version" {
   type        = number
   default     = 1
 }
+
+variable "db_role" {
+  description = "primary: the writable database. replica: a cross-region read replica of the database in db_primary_region."
+  type        = string
+  default     = "primary"
+  validation {
+    condition     = contains(["primary", "replica"], var.db_role)
+    error_message = "db_role must be primary or replica."
+  }
+}
+
+variable "db_primary_region" {
+  description = "Replica only: the region whose database this one replicates"
+  type        = string
+  default     = "ap-southeast-2"
+}
+
+variable "db_replica_regions" {
+  description = "Primary only: regions that get a copy of the database credentials secret (one per read replica)"
+  type        = list(string)
+  default     = []
+}
+
+variable "db_password_version" {
+  description = "Primary only: bump to generate a new master password and write it to RDS and the credentials secret"
+  type        = number
+  default     = 1
+}

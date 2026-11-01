@@ -8,9 +8,14 @@
 # it from the tailnet only when its Service is deleted, so the name (argocd-syd) is free for
 # the next build.
 #
+# Prometheus' EBS volume is the third: it comes from a StatefulSet's PersistentVolumeClaim,
+# which Kubernetes keeps even after Prometheus is deleted. Deleting the claim makes the EBS
+# CSI driver delete the volume (the gp3 StorageClass has reclaimPolicy Delete), but only while
+# the cluster still exists.
+#
 # Order: stop Argo CD re-creating things, take the Argo CD UI off the tailnet, delete the web
-# app (Ingress -> ALB), wait until AWS shows no ALB for this cluster, then Terraform can
-# destroy 40 -> 30 -> 20 -> 10.
+# app (Ingress -> ALB) and Prometheus (its volume), wait until AWS shows no ALB and no volume
+# for this cluster, then Terraform can destroy 40 -> 30 -> 20 -> 10.
 #
 #   scripts/drain-cluster.sh ap-southeast-2
 set -euo pipefail
@@ -24,20 +29,31 @@ fi
 aws eks update-kubeconfig --region "$region" --name "$cluster" --alias "$cluster" >/dev/null
 k() { kubectl --context "$cluster" "$@"; }
 
-echo "1/4 Stop Argo CD re-creating what we delete"
+echo "1/5 Stop Argo CD re-creating what we delete"
 k -n argocd patch application root --type merge -p '{"spec":{"syncPolicy":null}}' || true
+k -n argocd patch application platform --type merge -p '{"spec":{"syncPolicy":null}}' 2>/dev/null || true
 k -n argocd patch application tailscale --type merge -p '{"spec":{"syncPolicy":null}}' 2>/dev/null || true
 
-echo "2/4 Take the Argo CD UI off the tailnet (the operator removes the device, then the finalizer)"
+echo "2/5 Take the Argo CD UI off the tailnet (the operator removes the device, then the finalizer)"
 k -n argocd delete service argocd-server-tailnet --ignore-not-found --wait=true --timeout=3m || \
   echo "  Still there after 3 minutes; remove the argocd device in the Tailscale admin console." >&2
 
-echo "3/4 Delete the web app; the Ingress finalizer makes the controller delete the ALB"
+echo "3/5 Delete the web app; the Ingress finalizer makes the controller delete the ALB"
 for app in ingress frontend backend; do
   k -n argocd delete application "$app" --ignore-not-found --wait=true --timeout=5m
 done
 
-echo "4/4 Wait until AWS has no load balancer for $cluster"
+echo "4/5 Delete Prometheus and its volume claims; the EBS CSI driver deletes the volumes"
+k -n argocd delete application kube-prometheus-stack --ignore-not-found --wait=true --timeout=5m
+k -n monitoring delete pvc --all --ignore-not-found --wait=true --timeout=5m || true
+for _ in $(seq 1 30); do
+  n=$(k get pv -o jsonpath='{range .items[?(@.spec.claimRef.namespace=="monitoring")]}x{end}' | wc -c)
+  [[ $n == 0 ]] && break
+  sleep 10
+done
+[[ ${n:-0} == 0 ]] || echo "  Prometheus volumes still present; check EC2 > Volumes after the destroy." >&2
+
+echo "5/5 Wait until AWS has no load balancer for $cluster"
 for i in $(seq 1 60); do
   n=$(aws resourcegroupstaggingapi get-resources --region "$region" \
         --resource-type-filters elasticloadbalancing:loadbalancer \

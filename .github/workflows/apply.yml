@@ -5,7 +5,8 @@
 #                   are skipped with a note) and lists the results in the run summary
 #   apply-region    waits for approval in the "production" environment, then builds each
 #                   region in its own job, in parallel: 10-network -> 20-eks -> 30-data ->
-#                   40-argocd
+#                   40-argocd. London's database is a read replica of Sydney's, so London's
+#                   30-data waits until Sydney's database is available.
 #
 # The foundation (state bucket, these CI roles, ECR) must already be up: it's applied from a
 # laptop with scripts/foundation.sh, not here.
@@ -85,21 +86,20 @@ jobs:
         run: scripts/tf.sh apply 10-network ${{ matrix.region }}
       - name: 20-eks
         run: scripts/tf.sh apply 20-eks ${{ matrix.region }}
+      - name: wait for the primary database (replica regions only)
+        if: matrix.region != 'ap-southeast-2'
+        run: scripts/wait-for-primary-db.sh ap-southeast-2
       - name: 30-data
         run: scripts/tf.sh apply 30-data ${{ matrix.region }}
       - name: 40-argocd
         run: scripts/tf.sh apply 40-argocd ${{ matrix.region }}
-      - name: hand-off values for the gitops repo
+      - name: summary
         run: |
           out() { terraform -chdir=stacks/30-data output -raw "$1"; }
           scripts/tf.sh init 30-data ${{ matrix.region }} >/dev/null
-          host=$(out db_endpoint)
           {
-            echo "### ${{ matrix.region }}: values for gitops envs/prod/${{ matrix.region }}/values/backend.yaml"
-            echo '```yaml'
-            echo "database.host: ${host%:*}"
-            echo "secrets.dbSecretName: $(out db_master_secret_arn)"
-            echo "media.bucket: $(out media_bucket)"
-            echo '```'
-            echo "Or run \`scripts/gitops-handoff.sh ${{ matrix.region }}\` locally."
+            echo "### ${{ matrix.region }}"
+            echo "Database: $(out db_endpoint) ($(out db_role))"
+            echo "Media bucket: $(out media_bucket)"
+            echo "Nothing to copy into gitops: it names the secrets and bucket by their fixed names."
           } >> "$GITHUB_STEP_SUMMARY"
