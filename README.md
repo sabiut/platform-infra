@@ -4,6 +4,10 @@ Terraform for the production EKS platform: two regional cells (Sydney `ap-southe
 London `eu-west-2`), each with its own VPC, EKS cluster, RDS database and Argo CD. Argo CD then
 deploys everything inside the clusters from the `gitops` repo on GitLab.
 
+The one link between the regions is the database: Sydney's is the writable primary and
+London's is a cross-region read replica of it, a warm standby
+(failover: `docs/database-failover.md`).
+
 Design and reasoning: `eks-gitops-platform/docs/design.html`.
 
 ## Layout
@@ -13,19 +17,24 @@ Design and reasoning: `eks-gitops-platform/docs/design.html`.
 | `foundation/` | local (`foundation/terraform.tfstate`, gitignored) | State bucket, GitHub + GitLab OIDC providers, `gha-plan`, `gha-apply`, `gitlab-<app>-push` roles, ECR repos in both regions with replication, Route 53 zone (once there's a domain) |
 | `stacks/10-network/` | `prod/<region>/10-network.tfstate` | VPC over 3 AZs, public/private/database subnets, NAT per AZ, VPC endpoints |
 | `stacks/20-eks/` | `prod/<region>/20-eks.tfstate` | EKS 1.37, managed node group, add-ons, access entries, Pod Identity roles for add-ons |
-| `stacks/30-data/` | `prod/<region>/30-data.tfstate` | RDS PostgreSQL 17 Multi-AZ, media bucket, Django secret, backend Pod Identity |
+| `stacks/30-data/` | `prod/<region>/30-data.tfstate` | RDS PostgreSQL 17 Multi-AZ (primary in Sydney, read replica in London), database secrets, media bucket, Django secret, backend Pod Identity |
 | `stacks/40-argocd/` | `prod/<region>/40-argocd.tfstate` | Argo CD (HA), gitops repo credentials, the root Application |
 | `envs/prod/` | | Settings per region, one tfvars file per stack |
 
 Stacks read upstream outputs from S3 (`terraform_remote_state`), so apply them in order:
-the foundation, then per region `10 → 20 → 30 → 40`.
+the foundation, then per region `10 → 20 → 30 → 40`. London's `30-data` also needs Sydney's
+`30-data` applied first (its database is the replica's source).
+
+Every name the `gitops` repo needs is fixed, so nothing is copied into it after an apply:
+the secrets `prod/webapp/database` and `prod/webapp/database-endpoint`, and the media bucket
+`prod-<region>-webapp-media-<account id>`.
 
 ## Two lifecycles
 
 | | Foundation | Regions |
 |---|---|---|
 | What | state bucket, CI roles, ECR | VPC, EKS, RDS, Argo CD per region |
-| Cost while up | cents a month | about US$1 an hour for both regions |
+| Cost while up | cents a month | about US$1.50-2 an hour for both regions (NAT per AZ, interface endpoints, Multi-AZ databases) |
 | Run from | your laptop: `make foundation-up` / `make foundation-down` | GitHub Actions: `apply` / `destroy` |
 | Why there | it creates the bucket and the roles CI signs in with, so CI can't create it | everything goes through review and the `production` approval |
 
@@ -57,7 +66,8 @@ and GitLab CI settings stay valid across rebuilds.
    `prod/platform/tailscale-operator` holding a Tailscale OAuth client:
    `{"client_id": "...", "client_secret": "..."}`. The tailnet setup is in the gitops README.
 5. Open a pull request. The plan appears as comments. Merge it, approve the `production`
-   deployment, and the apply builds Sydney and London in parallel.
+   deployment, and the apply builds Sydney and London in parallel (London's database step
+   waits for Sydney's).
 
 ## Pipelines
 
@@ -65,7 +75,7 @@ and GitLab CI settings stay valid across rebuilds.
 |---|---|---|---|
 | `plan.yml` | pull request | `gha-plan` (read-only) | fmt, tflint, trivy, plan per stack and region, PR comments |
 | `apply.yml` | merge to `main`, or Run workflow | `gha-plan`, then `gha-apply` after approval | plan all; approve; both regions in parallel |
-| `destroy.yml` | Run workflow only (type `destroy`) | `gha-apply` after approval | drain the ALB, then destroy 40 -> 10 per region |
+| `destroy.yml` | Run workflow only (type `destroy`) | `gha-apply` after approval | drain the ALB and Prometheus' volume, turn off database deletion protection, then destroy 40 -> 10 per region |
 | `drift.yml` | nightly | `gha-plan` | plan all, open an issue if anything changed outside Terraform |
 
 No AWS keys are stored anywhere: GitHub gets short-lived credentials through OIDC, and the
@@ -73,8 +83,13 @@ apply role only trusts jobs in the approved `production` environment.
 
 ## Destroy
 
-Per region: `scripts/drain-cluster.sh <region>` (removes the ALB, which Terraform doesn't
-own), then `scripts/tf.sh destroy` for `40 → 30 → 20 → 10`. Then, when finished with the
-project, `make foundation-down`. With the
-production values, set `db_deletion_protection = false` and apply `30-data` first, or RDS
-refuses to be deleted (a final snapshot is still taken).
+Use the `destroy` workflow. By hand, per region: `scripts/drain-cluster.sh <region>`
+(removes the ALB and Prometheus' EBS volume, which Terraform doesn't own), then
+`scripts/tf.sh destroy` for `40 → 30 → 20 → 10`. The databases have deletion protection, so
+before `30-data` turn it off:
+
+    aws rds modify-db-instance --region <region> --db-instance-identifier prod-<region>-webapp \
+      --no-deletion-protection --apply-immediately
+
+Destroy London's `30-data` before Sydney's, or RDS promotes the replica instead of deleting
+it with its source. Then, when finished with the project, `make foundation-down`.

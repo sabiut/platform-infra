@@ -3,7 +3,11 @@
 #
 # Order matters: drain-cluster.sh first deletes the web app so the AWS Load Balancer
 # Controller removes the ALB (Terraform doesn't own it, and the VPC can't be deleted while
-# it exists). Then 40 -> 30 -> 20 -> 10. The foundation (state bucket, CI roles, ECR)
+# it exists). Then 40 -> 30 -> 20 -> 10.
+#
+# The databases have deletion protection. This workflow is the deliberate way to delete them,
+# so it switches the protection off just before 30-data. Sydney's database waits for London's
+# read replica to go first; otherwise RDS would promote the replica on the way out. The foundation (state bucket, CI roles, ECR)
 # is left alone; take it down from a laptop with scripts/foundation.sh down.
 name: destroy
 
@@ -73,6 +77,26 @@ jobs:
         run: scripts/drain-cluster.sh ${{ matrix.region }}
       - name: 40-argocd
         run: scripts/tf.sh destroy 40-argocd ${{ matrix.region }}
+      - name: allow the database to be deleted
+        env:
+          REGION: ${{ matrix.region }}
+          REGIONS: ${{ inputs.regions }}
+        run: |
+          db="prod-$REGION-webapp"
+          if [[ $REGION == ap-southeast-2 && $REGIONS == both ]]; then
+            for _ in $(seq 1 90); do
+              aws rds describe-db-instances --region eu-west-2 \
+                --db-instance-identifier prod-eu-west-2-webapp >/dev/null 2>&1 || break
+              echo "Waiting for London's read replica to be deleted first..."
+              sleep 30
+            done
+          fi
+          if aws rds describe-db-instances --region "$REGION" --db-instance-identifier "$db" >/dev/null 2>&1; then
+            aws rds modify-db-instance --region "$REGION" --db-instance-identifier "$db" \
+              --no-deletion-protection --apply-immediately >/dev/null
+            aws rds wait db-instance-available --region "$REGION" --db-instance-identifier "$db"
+            echo "Deletion protection off for $db."
+          fi
       - name: 30-data
         run: scripts/tf.sh destroy 30-data ${{ matrix.region }}
       - name: 20-eks
